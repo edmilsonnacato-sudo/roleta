@@ -1,0 +1,7 @@
+{
+  "name": "Roulette Pro Analyzer",
+  "description": "An AI-powered roulette screenshot analyzer that suggests betting terminals based on real-time game history and pattern recognition.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
