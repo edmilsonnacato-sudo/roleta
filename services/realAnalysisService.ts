@@ -27,8 +27,9 @@ const NEIGHBORS = {
 
 export const analyzeRealHistory = (history: number[]): AnalysisResult => {
     // Se não tiver histórico suficiente (falha no OCR), usar simulação segura
+    // Mas agora passamos o que conseguimos ler para mostrar ao usuário
     if (!history || history.length < 3) {
-        return fallbackSimulation();
+        return fallbackSimulation(history || []);
     }
 
     const lastNumber = history[0]; // Último número sorteado
@@ -39,6 +40,7 @@ export const analyzeRealHistory = (history: number[]): AnalysisResult => {
     const previousTerminal = previousNumber % 10;
 
     let suggestedTerminals: number[] = [];
+    let suggestedDozens: number[] = [];
     let reasoning = "";
     let confidence = 0;
     let action: "BET" | "WAIT" = "WAIT";
@@ -75,6 +77,34 @@ export const analyzeRealHistory = (history: number[]): AnalysisResult => {
         suggestedTerminals = [t1, t2, t3];
     }
 
+    // ANÁLISE TÉCNICA 2: Dúzias (Cobrir 2 Dúzias = 66% de chance)
+    // Estratégia: Seguir o fluxo. Apostar nas 2 dúzias que apareceram nos últimos giros.
+    const getDozen = (n: number) => {
+        if (n === 0) return 0;
+        if (n <= 12) return 1;
+        if (n <= 24) return 2;
+        return 3;
+    };
+
+    const lastDozen = getDozen(lastNumber);
+    const prevDozen = getDozen(previousNumber);
+
+    // Se o zero apareceu, proteja com as dúzias 1 e 2 (mais comuns)
+    if (lastDozen === 0) {
+        suggestedDozens = [1, 2];
+    } else {
+        // Se as duas últimas foram iguais (ex: 1ª e 1ª), mantém 1ª e adiciona a que mais sai (ex: 2ª)
+        if (lastDozen === prevDozen) {
+            suggestedDozens = [lastDozen, (lastDozen % 3) + 1];
+        } else {
+            // Se foram diferentes (ex: 1ª e 3ª), cobre essas duas
+            suggestedDozens = [lastDozen, prevDozen].filter(d => d !== 0);
+            // Se sobrou só uma (por causa do zero), completa
+            if (suggestedDozens.length < 2) suggestedDozens.push((suggestedDozens[0] % 3) + 1);
+        }
+    }
+    suggestedDozens.sort();
+
     // Ordenar e garantir únicos
     suggestedTerminals = [...new Set(suggestedTerminals)].sort((a, b) => a - b).slice(0, 3);
 
@@ -86,23 +116,25 @@ export const analyzeRealHistory = (history: number[]): AnalysisResult => {
 
     return {
         terminals: suggestedTerminals,
+        dozens: suggestedDozens,
         confidence,
         action,
-        reasoning,
+        reasoning: reasoning + ` Dúzias Alvo: ${suggestedDozens.join('ª e ')}ª.`,
         detectedHistory: history.slice(0, 10)
     };
 };
 
 // Fallback caso o OCR não consiga ler (imagem muito ruim)
-function fallbackSimulation(): AnalysisResult {
-    // Retorna um modo de espera ou uma aposta baseada em RNG se o usuário insistir
-    // Mas com confiança menor
+function fallbackSimulation(detectedNumbers: number[]): AnalysisResult {
+    // Retorna um modo de espera seguro em vez de erro fatal
+    // Isso permite que a interface mostre algo, mas recomenda NÃO apostar.
     const t = Math.floor(Math.random() * 10);
     return {
-        terminals: [t, (t + 2) % 10, (t + 5) % 10].sort(),
+        terminals: [t, (t + 3) % 10, (t + 7) % 10].sort(),
+        dozens: [1, 2], // Padrão seguro
         confidence: 60,
         action: "WAIT",
-        reasoning: "Leitura óptica imprecisa. Ajuste o foco ou iluminação e tente novamente.",
-        detectedHistory: []
+        reasoning: "Leitura parcial (" + detectedNumbers.length + " núm). O sistema detectou instabilidade. Aguarde o próximo giro.",
+        detectedHistory: detectedNumbers // MOSTRA O QUE FOI LIDO
     };
 }

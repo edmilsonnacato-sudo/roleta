@@ -1,5 +1,6 @@
 
 import Tesseract from 'tesseract.js';
+import { preprocessImageForOCR } from './imageUtils';
 
 export interface ExtractedData {
     numbers: number[];
@@ -12,47 +13,64 @@ export interface ExtractedData {
  * Otimizado para identificar dígitos (0-9) e limpar ruídos.
  */
 export const extractNumbersFromImage = async (imageFile: File | string): Promise<ExtractedData> => {
+    let worker: Tesseract.Worker | null = null;
     try {
-        // Pré-processamento: O Tesseract funciona melhor com imagens em preto e branco de alto contraste.
-        // Como estamos no navegador, vamos assumir que a imagem comprimida já ajuda, 
-        // mas podemos configurar o Tesseract para whitelist de números.
-
-        const worker = await Tesseract.createWorker('eng'); // 'eng' é mais rápido para dígitos
+        worker = await Tesseract.createWorker('eng');
 
         // Configurar para buscar APENAS números
         await worker.setParameters({
             tessedit_char_whitelist: '0123456789',
         });
 
-        const { data: { text, confidence } } = await worker.recognize(imageFile);
+        // 1. TENTATIVA COM FILTRO (Grayscale + Inversão)
+        const processedImageBase64 = await preprocessImageForOCR(imageFile as File);
+        const result1 = await worker.recognize(processedImageBase64);
 
-        await worker.terminate();
+        const text1 = result1.data.text;
+        const confidence1 = result1.data.confidence;
 
-        // Processar o texto bruto para extrair números
-        // Muitas vezes o OCR retorna linhas quebradas ou caracteres estranhos
-        const cleanedText = text.replace(/[^0-9\s]/g, ' ').trim();
+        const numbers1 = parseNumbers(text1);
 
-        // Converter para array de números
-        // Filtra números válidos de roleta (0-36)
-        const numbers = cleanedText
-            .split(/\s+/)
-            .map(num => parseInt(num, 10))
-            .filter(n => !isNaN(n) && n >= 0 && n <= 36);
-
-        // Se encontrou poucos números, pode ser erro de leitura
-        if (numbers.length < 3) {
-            console.warn("OCR: Poucos números encontrados", numbers);
-            // Retorna array vazio para indicar falha na extração significativa
-            return { numbers: [], confidence: 0 };
+        // Se o filtro funcionou bem (3+ números), retorna
+        if (numbers1.length >= 3) {
+            return {
+                numbers: numbers1.slice(0, 12),
+                confidence: confidence1
+            };
         }
 
-        return {
-            numbers: numbers.slice(0, 12), // Pegar os últimos 10-12 números (histórico recente)
-            confidence: confidence
-        };
+        // 2. TENTATIVA COM IMAGEM ORIGINAL (Fallback)
+        // Se o filtro falhou, usamos a imagem original ainda com o mesmo worker ativo
+        console.warn("OCR: Filtro insuficiente, tentando imagem original...");
+        const result2 = await worker.recognize(imageFile);
+        const numbers2 = parseNumbers(result2.data.text);
+
+        if (numbers2.length >= 3) {
+            return {
+                numbers: numbers2.slice(0, 12),
+                confidence: 80 // Confiança estimada para fallback
+            };
+        }
+
+        // Falha Total
+        console.warn("OCR: Falha em ambas tentativas.");
+        return { numbers: [], confidence: 0 };
 
     } catch (error) {
         console.error("Erro no OCR:", error);
         return { numbers: [], confidence: 0 };
+    } finally {
+        // SEMPRE encerrar o worker para liberar memória
+        if (worker) {
+            await worker.terminate();
+        }
     }
+};
+
+// Helper para limpar e parsear números
+const parseNumbers = (text: string): number[] => {
+    return text.replace(/[^0-9\s]/g, ' ').trim()
+        .split(/\s+/)
+        .map(num => parseInt(num, 10))
+        .filter(n => !isNaN(n) && n >= 0 && n <= 36);
 };

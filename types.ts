@@ -1,8 +1,9 @@
 
 export interface AnalysisResult {
   terminals: number[];
+  dozens: number[]; // Sugestão das 2 Dúzias mais fortes
   confidence: number;
-  action: 'BET' | 'WAIT';
+  action: 'BET' | 'WAIT' | 'ERROR';
   reasoning: string;
   detectedHistory: number[];
 }

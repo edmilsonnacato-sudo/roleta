@@ -3,9 +3,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { GameStatus, AnalysisResult, BetHistory } from './types';
 import { extractNumbersFromImage } from './services/ocrService';
 import { analyzeRealHistory } from './services/realAnalysisService';
+import { analyzeRouletteScreenshot } from './services/geminiService'; // Nova IA
 import { compressImage } from './services/imageUtils';
 import { HistoryList } from './components/HistoryList';
-import { Upload, AlertOctagon, Aperture, Activity, Wifi, ShieldCheck, Clock, CheckCircle2, ChevronRight, Zap } from 'lucide-react';
+import { initAntiDebug } from './utils/antiDebug'; // Proteção anti-cópia
+import { Upload, AlertOctagon, Aperture, Activity, Wifi, ShieldCheck, Clock, CheckCircle2, ChevronRight, Zap, Settings, X, ExternalLink } from 'lucide-react';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<GameStatus>(GameStatus.IDLE);
@@ -14,6 +16,44 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [timer, setTimer] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [showHistory, setShowHistory] = useState<boolean>(false);
+
+  // Chave da API Gemini (SOMENTE .env - PROTEGIDO)
+  // @ts-ignore
+  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+
+  // Monitor de uso da API (Proteção de custos)
+  const DAILY_LIMIT = 1500; // Limite gratuito do Gemini
+  const SAFE_LIMIT = Math.floor(DAILY_LIMIT * 0.9); // 90% = 1350
+
+  const [apiUsageToday, setApiUsageToday] = useState<number>(() => {
+    const saved = localStorage.getItem('gemini_usage_data');
+    if (!saved) return 0;
+
+    const data = JSON.parse(saved);
+    const today = new Date().toDateString();
+
+    // Se mudou de dia, resetar contador
+    if (data.date !== today) {
+      localStorage.setItem('gemini_usage_data', JSON.stringify({ date: today, count: 0 }));
+      return 0;
+    }
+
+    return data.count || 0;
+  });
+
+  // Carregar contador de sessão do localStorage
+  const [sessionSignals, setSessionSignals] = useState<number>(() => {
+    const saved = localStorage.getItem('quantumSessionSignals');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  // Inicializar proteções anti-cópia
+  useEffect(() => {
+    initAntiDebug();
+  }, []);
+
+  const SESSION_LIMIT = 5;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -24,9 +64,39 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [status, timer, currentResult]);
 
+  // Monitor de sessão para debug
+  useEffect(() => {
+    localStorage.setItem('quantumSessionSignals', sessionSignals.toString());
+  }, [sessionSignals]);
+
+  // Salvar chave sempre que mudar
+  useEffect(() => {
+    if (geminiKey) {
+      localStorage.setItem('gemini_api_key', geminiKey);
+    }
+  }, [geminiKey]);
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // PROTEÇÃO: Chave obrigatória (sem configuração externa)
+    if (!geminiKey) {
+      alert("⚠️ SISTEMA NÃO CONFIGURADO\n\nContate o administrador do sistema.");
+      return;
+    }
+
+    // PROTEÇÃO: Verificar se atingiu limite seguro da API
+    if (apiUsageToday >= SAFE_LIMIT) {
+      alert(`🛑 LIMITE DE SEGURANÇA ATINGIDO\n\nVocê já usou ${apiUsageToday}/${DAILY_LIMIT} análises hoje.\n\nPara evitar custos, o sistema bloqueou novas análises.\n\nVolte amanhã ou configure alertas no Google Cloud.`);
+      return;
+    }
+
+    // Alerta preventivo (85%)
+    if (apiUsageToday >= DAILY_LIMIT * 0.85 && apiUsageToday < SAFE_LIMIT) {
+      const confirm = window.confirm(`⚠️ ALERTA DE USO\n\nVocê já usou ${apiUsageToday}/${DAILY_LIMIT} análises (${Math.round(apiUsageToday / DAILY_LIMIT * 100)}%).\n\nRestam apenas ${SAFE_LIMIT - apiUsageToday} análises seguras hoje.\n\nContinuar?`);
+      if (!confirm) return;
+    }
 
     setStatus(GameStatus.ANALYZING);
     setIsProcessing(true);
@@ -35,22 +105,31 @@ const App: React.FC = () => {
     setCurrentResult(null);
 
     try {
-      // 1. Processamento Visual para Display
-      const compressedBase64 = await compressImage(file, 1000, 0.7);
+      // 1. Processamento Visual (Otimizado para velocidade)
+      const compressedBase64 = await compressImage(file, 800, 0.45);
 
-      // 2. OCR Local (Extração REAL dos números)
-      // Pode demorar um pouco mais (2-4s), mas é real
-      const extractedData = await extractNumbersFromImage(file);
+      // 2. DECISÃO: USAR IA GEMINI SOBERANA
+      console.log('🤖 Usando Gemini Vision AI...');
 
-      // 3. Análise Lógica Real
-      const result = analyzeRealHistory(extractedData.numbers);
+      const result = await analyzeRouletteScreenshot(compressedBase64, geminiKey);
+
+      console.log('🎲 Análise IA Completa:', result);
+
+      // Incrementar contador de uso da API
+      const newCount = apiUsageToday + 1;
+      setApiUsageToday(newCount);
+      const today = new Date().toDateString();
+      localStorage.setItem('gemini_usage_data', JSON.stringify({ date: today, count: newCount }));
 
       setCurrentResult(result);
       setStatus(GameStatus.SUCCESS);
       setIsProcessing(false);
       setTimer(15);
 
-      // Adicionar ao histórico visual
+      // Incrementar contador
+      setSessionSignals(prev => prev + 1);
+
+      // Histórico
       const newHistoryItem: BetHistory = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
@@ -61,7 +140,7 @@ const App: React.FC = () => {
 
     } catch (err: any) {
       console.error(err);
-      setError("Falha na leitura óptica. Verifique se a imagem está nítida.");
+      setError(err.message || "Falha na análise da IA.");
       setStatus(GameStatus.ERROR);
       setIsProcessing(false);
     }
@@ -69,7 +148,7 @@ const App: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen text-slate-100 font-sans tracking-tight overflow-x-hidden selection:bg-emerald-500/30 bg-fixed bg-cover bg-center"
+      className="min-h-screen text-slate-100 font-sans tracking-tight overflow-x-hidden selection:bg-emerald-500/30 bg-fixed bg-cover bg-center relative"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.95)), url('https://images.unsplash.com/photo-1596838132731-3301c3fd4317?q=80&w=2600&auto=format&fit=crop')`
       }}
@@ -93,9 +172,59 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 border border-emerald-500/50 backdrop-blur-md shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:bg-black/80 transition-colors cursor-pointer">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,1)] animate-pulse"></div>
-            <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase tracking-wider">SYSTEM ON</span>
+
+          {/* Session Counter / API Monitor / Settings */}
+          <div className="flex items-center gap-3">
+            {/* Monitor de Uso da API */}
+            {geminiKey && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/40 border border-white/10">
+                <Activity className={`w-3.5 h-3.5 ${apiUsageToday >= SAFE_LIMIT ? 'text-red-500 animate-pulse' :
+                  apiUsageToday >= DAILY_LIMIT * 0.85 ? 'text-orange-500' :
+                    apiUsageToday >= DAILY_LIMIT * 0.7 ? 'text-yellow-500' :
+                      'text-emerald-500'
+                  }`} />
+                <div className="flex flex-col">
+                  <span className={`text-[9px] font-mono font-bold ${apiUsageToday >= SAFE_LIMIT ? 'text-red-400' :
+                    apiUsageToday >= DAILY_LIMIT * 0.85 ? 'text-orange-400' :
+                      apiUsageToday >= DAILY_LIMIT * 0.7 ? 'text-yellow-400' :
+                        'text-emerald-400'
+                    }`}>
+                    {apiUsageToday}/{DAILY_LIMIT}
+                  </span>
+                  <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${apiUsageToday >= SAFE_LIMIT ? 'bg-red-500' :
+                        apiUsageToday >= DAILY_LIMIT * 0.85 ? 'bg-orange-500' :
+                          apiUsageToday >= DAILY_LIMIT * 0.7 ? 'bg-yellow-500' :
+                            'bg-emerald-500'
+                        }`}
+                      style={{ width: `${Math.min((apiUsageToday / DAILY_LIMIT) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {sessionSignals >= SESSION_LIMIT ? (
+              <button
+                onClick={() => {
+                  if (confirm('Você aguardou 3-4 horas? Deseja resetar o contador de sessão?')) {
+                    setSessionSignals(0);
+                    localStorage.setItem('quantumSessionSignals', '0');
+                    console.log('🔄 Contador resetado para nova sessão');
+                  }
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-600/20 border border-red-500 backdrop-blur-md animate-pulse hover:bg-red-600/30 transition-all cursor-pointer"
+              >
+                <ShieldCheck className="w-3 h-3 text-red-500" />
+                <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">META: PARE</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 border border-emerald-500/50 backdrop-blur-md shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,1)] animate-pulse"></div>
+                <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase tracking-wider">{sessionSignals}/{SESSION_LIMIT}</span>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -134,8 +263,8 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex flex-col items-center gap-1">
-                  <span className="text-yellow-400 font-display text-sm font-bold tracking-[0.2em] uppercase animate-pulse drop-shadow-lg">Decodificando</span>
-                  <span className="text-white/50 text-[10px] uppercase tracking-widest bg-black/50 px-3 py-1 rounded-full">Algoritmo Neural v2.0</span>
+                  <span className="text-yellow-400 font-display text-sm font-bold tracking-[0.2em] uppercase animate-pulse drop-shadow-lg">Conectando IA</span>
+                  <span className="text-white/50 text-[10px] uppercase tracking-widest bg-black/50 px-3 py-1 rounded-full">Gemini Vision Pro</span>
                 </div>
               </div>
             ) : (
@@ -151,7 +280,7 @@ const App: React.FC = () => {
                   <h3 className="font-display text-white text-2xl font-black tracking-wide drop-shadow-md">ESCANEAR AGORA</h3>
                   <div className="flex items-center justify-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span className="text-emerald-400 text-xs font-bold tracking-wider shadow-black drop-shadow-sm">IA CONECTADA</span>
+                    <span className="text-emerald-400 text-xs font-bold tracking-wider shadow-black drop-shadow-sm">IA GENERATIVA ATIVA</span>
                   </div>
                 </div>
               </div>
@@ -187,7 +316,9 @@ const App: React.FC = () => {
               relative overflow-hidden rounded-[2.5rem] border-[3px] p-8 flex flex-col items-center justify-center text-center shadow-2xl transition-all duration-300 backdrop-blur-xl
               ${currentResult.action === 'BET'
                 ? 'bg-green-950/70 border-emerald-400 shadow-[0_0_100px_rgba(16,185,129,0.4)]'
-                : 'bg-amber-950/70 border-amber-500 shadow-[0_0_100px_rgba(245,158,11,0.4)]'}
+                : currentResult.action === 'ERROR'
+                  ? 'bg-red-950/90 border-red-500 shadow-[0_0_100px_rgba(239,68,68,0.6)]' // Estilo de ERRO
+                  : 'bg-amber-950/70 border-amber-500 shadow-[0_0_100px_rgba(245,158,11,0.4)]'}
             `}>
 
               <div className="relative z-10 flex flex-col items-center gap-6 w-full">
@@ -195,9 +326,13 @@ const App: React.FC = () => {
                 {/* Confidence Badge */}
                 <div className={`
                   px-5 py-2 rounded-full border-2 text-xs font-black tracking-[0.3em] uppercase backdrop-blur-md shadow-lg
-                  ${currentResult.action === 'BET' ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-emerald-500/30' : 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-amber-500/30'}
+                   ${currentResult.action === 'BET'
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-emerald-500/30'
+                    : currentResult.action === 'ERROR'
+                      ? 'bg-red-500/20 border-red-400 text-red-300 shadow-red-500/30'
+                      : 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-amber-500/30'}
                 `}>
-                  {currentResult.action === 'BET' ? 'OPORTUNIDADE ALTA' : 'ALTA VOLATILIDADE'}
+                  {currentResult.action === 'BET' ? 'PADRÃO DETECTADO' : (currentResult.action === 'ERROR' ? 'FALHA TÉCNICA' : 'AGUARDE PADRÃO')}
                 </div>
 
                 {/* MAIN ACTION TEXT */}
@@ -206,9 +341,11 @@ const App: React.FC = () => {
                      font-display text-[4rem] leading-none font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-b drop-shadow-2xl
                      ${currentResult.action === 'BET'
                       ? 'from-white via-emerald-200 to-emerald-600 drop-shadow-[0_0_30px_rgba(52,211,153,0.8)]'
-                      : 'from-white via-amber-200 to-amber-600 drop-shadow-[0_0_30px_rgba(251,191,36,0.8)]'}
+                      : currentResult.action === 'ERROR'
+                        ? 'from-white via-red-200 to-red-600 drop-shadow-[0_0_30px_rgba(239,68,68,0.8)]'
+                        : 'from-white via-amber-200 to-amber-600 drop-shadow-[0_0_30px_rgba(251,191,36,0.8)]'}
                    `}>
-                    {currentResult.action === 'BET' ? 'ENTRAR' : 'ESPERAR'}
+                    {currentResult.action === 'BET' ? 'ENTRAR' : (currentResult.action === 'ERROR' ? 'ERRO OCR' : 'ESPERAR')}
                   </span>
                 </div>
 
@@ -228,20 +365,24 @@ const App: React.FC = () => {
                         style={{ width: `${(timer / 15) * 100}%` }}
                       ></div>
                     </div>
-
-                    {/* Validade do Sinal */}
-                    <div className="flex items-center justify-center gap-2 text-[10px] font-mono font-bold text-slate-400 bg-black/20 py-1.5 rounded-lg border border-white/5">
-                      <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                      <span>SINAL VÁLIDO POR: <span className="text-white">3 RODADAS</span></span>
-                    </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* NEON TERMINALS */}
-            <div className={`transition-all duration-500 ${currentResult.action === 'BET' ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 hidden'}`}>
+            {/* NEON TERMINALS & DOZENS */}
+            <div className={`transition-all duration-500 ${currentResult.action !== 'ERROR' ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 hidden'}`}>
               <div className="bg-black/60 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-6 relative shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+
+                {/* ERROR MESSAGE CARD */}
+                {currentResult.action === 'ERROR' && (
+                  <div className="absolute inset-0 z-20 bg-red-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center rounded-[2rem] border-2 border-red-500">
+                    <AlertOctagon className="w-16 h-16 text-red-500 mb-4 animate-pulse" />
+                    <h3 className="text-2xl font-black text-white uppercase mb-2">Imagem Inválida</h3>
+                    <p className="text-red-200 font-medium">O sistema não conseguiu ler os números.</p>
+                    <p className="text-sm text-red-300 mt-2">Use a IA Gemini para correção automática.</p>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-3">
@@ -262,14 +403,94 @@ const App: React.FC = () => {
                   ))}
                 </div>
 
+                {/* DOZENS SECTION */}
+                <div className="mt-4 pt-4 border-t border-white/10">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Activity className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-black text-white uppercase tracking-wider">Cobrir Dúzias (66%)</span>
+                  </div>
+                  <div className="flex gap-3">
+                    {currentResult.dozens && currentResult.dozens.length > 0 ? (
+                      currentResult.dozens.map((dozen, i) => (
+                        <div key={i} className="flex-1 bg-white/5 border border-white/10 rounded-xl p-3 flex items-center justify-center gap-2 group hover:border-emerald-400 transition-colors">
+                          <span className="font-display text-xl font-black text-white">{dozen}ª</span>
+                          <span className="text-[10px] uppercase font-bold text-slate-400">Dúzia</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="w-full text-center text-xs text-slate-500 py-2">Sem sugestão de dúzia</div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="mt-6 pt-5 border-t border-white/10">
                   <p className="text-xs text-slate-300 leading-relaxed font-medium bg-white/5 p-3 rounded-xl border border-white/5">
                     <span className="text-yellow-400 font-bold uppercase tracking-wide text-[10px] block mb-1">Motivo da Entrada:</span>
                     {currentResult.reasoning}
                   </p>
+
+                  {/* MOSTRAR LEITURA REAL CONFIRMANDO QUE A IA LEU CERTO */}
+                  {currentResult.detectedHistory.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-white/5">
+                      <span className="text-[10px] text-yellow-500 font-bold uppercase block mb-1">Leitura Gemini IA (100% Preciso):</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {currentResult.detectedHistory.map((n, idx) => (
+                          <span key={idx} className="text-xs bg-black/40 px-1.5 py-0.5 rounded text-white font-mono">{n}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               </div>
             </div>
+
+            {/* ALERTA DE META BATIDA - 5 SINAIS */}
+            {sessionSignals >= SESSION_LIMIT && (
+              <div className="bg-gradient-to-br from-red-950/95 via-red-900/90 to-red-950/95 border-[3px] border-red-500 rounded-[2.5rem] p-8 flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-8 duration-500 backdrop-blur-xl shadow-[0_0_80px_rgba(239,68,68,0.6)] relative overflow-hidden">
+                {/* Efeito de brilho de fundo */}
+                <div className="absolute inset-0 bg-gradient-to-t from-red-500/10 via-transparent to-transparent animate-pulse"></div>
+
+                <div className="w-20 h-20 rounded-full bg-red-500/30 border-[3px] border-red-500 flex items-center justify-center animate-pulse shadow-[0_0_30px_rgba(239,68,68,0.8)] relative z-10">
+                  <ShieldCheck className="w-10 h-10 text-red-500" />
+                </div>
+
+                <div className="text-center space-y-3 relative z-10">
+                  <h3 className="font-display text-4xl font-black text-transparent bg-clip-text bg-gradient-to-b from-red-400 via-red-500 to-red-600 uppercase tracking-wider drop-shadow-[0_0_20px_rgba(239,68,68,0.8)] leading-tight">
+                    META BATIDA!
+                  </h3>
+
+                  <div className="bg-red-950/50 p-4 rounded-xl border border-red-500/30 backdrop-blur-sm">
+                    <p className="text-white text-lg font-black uppercase leading-relaxed tracking-wide drop-shadow-md">
+                      SAIA DA MESA E RETORNE APÓS 3 HORAS.
+                      <br />
+                      <span className="text-yellow-400 block mt-2 text-xl">
+                        MAS ACONSELHO A VOLTAR SÓ NO OUTRO DIA.
+                      </span>
+                    </p>
+                  </div>
+
+                  <p className="text-red-200/60 text-xs font-mono">
+                    {sessionSignals} análises realizadas
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-3 w-full relative z-10">
+                  <div className="flex items-center justify-center gap-2 px-5 py-3 rounded-full bg-red-500/30 border-2 border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.5)]">
+                    <AlertOctagon className="w-5 h-5 text-red-500 animate-pulse" />
+                    <span className="text-sm font-black text-red-500 uppercase tracking-wider">
+                      O SISTEMA PAROU
+                    </span>
+                  </div>
+
+                  <div className="text-center">
+                    <p className="text-[10px] text-red-400/60 font-medium">
+                      Clique no contador no topo para resetar se necessário
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Glass History Strip */}
             <div className="overflow-x-auto pb-4 scrollbar-hide pt-2">
@@ -295,7 +516,7 @@ const App: React.FC = () => {
         </section>
 
       </main>
-    </div>
+    </div >
   );
 };
 
