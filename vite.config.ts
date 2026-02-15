@@ -1,7 +1,7 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { obfuscator } from 'vite-plugin-obfuscator';
+import obfuscator from 'vite-plugin-javascript-obfuscator';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
