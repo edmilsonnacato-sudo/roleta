@@ -1,7 +1,7 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import obfuscator from 'vite-plugin-obfuscator';
+import { obfuscator } from 'vite-plugin-obfuscator';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
@@ -15,13 +15,12 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       // Ofuscação de código (apenas em produção)
-      isProduction && obfuscator({
+      isProduction ? obfuscator({
         options: {
           compact: true,
           controlFlowFlattening: true,
-          controlFlowFlatteningThreshold: 0.75,
-          deadCodeInjection: true,
-          deadCodeInjectionThreshold: 0.4,
+          controlFlowFlatteningThreshold: 0.5, // Reduzi um pouco para evitar crash de memória
+          deadCodeInjection: false, // Desativei injeção de código morto (pesado demais para Vercel Free)
           debugProtection: false,
           debugProtectionInterval: 0,
           disableConsoleOutput: true,
@@ -48,8 +47,8 @@ export default defineConfig(({ mode }) => {
           transformObjectKeys: true,
           unicodeEscapeSequence: false
         }
-      })
-    ].filter(Boolean),
+      }) : null
+    ].filter(Boolean) as any[],
     define: {
       'process.env.API_KEY': JSON.stringify(env.API_KEY || env.VITE_API_KEY || env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.API_KEY || env.VITE_API_KEY)
